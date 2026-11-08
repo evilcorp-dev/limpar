@@ -4,6 +4,7 @@ from discord.ext import commands
 import asyncio
 import os
 import time
+from datetime import timedelta
 from collections import defaultdict, deque
 from dotenv import load_dotenv
 
@@ -16,9 +17,9 @@ ROLE_ID     = int(os.getenv("ROLE_ID"))
 MOD_ROLE_ID = int(os.getenv("MOD_ROLE_ID"))
 PORT        = int(os.getenv("PORT", 8080))
 
-SPAM_LIMITE  = 5
-SPAM_JANELA  = 3.0
-SPAM_CASTIGO = 5
+SPAM_LIMITE  = 5      # mensagens
+SPAM_JANELA  = 3.0    # segundos
+SPAM_CASTIGO = 5      # minutos
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,18 +28,16 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild_obj = discord.Object(id=GUILD_ID)
 
-antispam_ativo = False
-historico: dict[int, deque] = defaultdict(lambda: deque())
+antispam_ativo = True   # ativo por padrão
+historico: dict[int, deque] = defaultdict(deque)
 punidos: set[int] = set()
 
 
 def tem_permissao_limpar(interaction: discord.Interaction) -> bool:
-    has_role = any(r.id == ROLE_ID for r in interaction.user.roles)
-    return has_role or interaction.user.id == OWNER_ID
+    return any(r.id == ROLE_ID for r in interaction.user.roles) or interaction.user.id == OWNER_ID
 
 def tem_permissao_mod(interaction: discord.Interaction) -> bool:
-    has_role = any(r.id == MOD_ROLE_ID for r in interaction.user.roles)
-    return has_role or interaction.user.id == OWNER_ID
+    return any(r.id == MOD_ROLE_ID for r in interaction.user.roles) or interaction.user.id == OWNER_ID
 
 
 @bot.event
@@ -47,27 +46,32 @@ async def on_ready():
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
         synced = await bot.tree.sync(guild=guild_obj)
-        print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) sincronizado(s).")
+        print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) — antispam ATIVO")
     except Exception as e:
-        print(f"[✗] Erro ao sincronizar: {e}")
+        print(f"[✗] Erro: {e}")
 
 
 @bot.event
 async def on_message(message: discord.Message):
-    if not antispam_ativo:
+    if not antispam_ativo or message.author.bot:
         await bot.process_commands(message)
         return
-    if message.author.bot:
-        await bot.process_commands(message)
-        return
+
     if not message.guild or message.guild.id != GUILD_ID:
         await bot.process_commands(message)
         return
 
     member = message.author
-    if any(r.id in (ROLE_ID, MOD_ROLE_ID) for r in member.roles) or member.id == OWNER_ID:
+    if isinstance(member, discord.User):
         await bot.process_commands(message)
         return
+
+    # cargos isentos
+    ids_isentos = {ROLE_ID, MOD_ROLE_ID}
+    if any(r.id in ids_isentos for r in member.roles) or member.id == OWNER_ID:
+        await bot.process_commands(message)
+        return
+
     if member.id in punidos:
         await bot.process_commands(message)
         return
@@ -75,19 +79,21 @@ async def on_message(message: discord.Message):
     agora = time.monotonic()
     fila = historico[member.id]
     fila.append(agora)
+
+    # remove mensagens antigas fora da janela
     while fila and agora - fila[0] > SPAM_JANELA:
         fila.popleft()
 
     if len(fila) >= SPAM_LIMITE:
         punidos.add(member.id)
-        fila.clear()
+        historico[member.id].clear()
+
         try:
-            await member.timeout(
-                __import__('datetime').timedelta(minutes=SPAM_CASTIGO),
-                reason="Antispam — flood detectado"
-            )
+            await member.timeout(timedelta(minutes=SPAM_CASTIGO), reason="Antispam — flood")
             try:
-                await member.send(f"🚫 Você foi silenciado em **{message.guild.name}** por **{SPAM_CASTIGO} minutos** por flood.")
+                await member.send(
+                    f"🚫 Você foi silenciado em **{message.guild.name}** por **{SPAM_CASTIGO} minutos** por enviar mensagens demais."
+                )
             except discord.HTTPException:
                 pass
             await message.channel.send(
@@ -97,9 +103,10 @@ async def on_message(message: discord.Message):
         except discord.Forbidden:
             pass
 
-        async def liberar():
+        async def liberar(uid=member.id):
             await asyncio.sleep(SPAM_CASTIGO * 60)
-            punidos.discard(member.id)
+            punidos.discard(uid)
+
         asyncio.create_task(liberar())
 
     await bot.process_commands(message)
@@ -128,7 +135,7 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
                 break
         await interaction.followup.send(f"✅ **{deleted_total}** mensagem(ns) apagada(s).", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send("❌ Sem permissão para apagar mensagens neste canal.", ephemeral=True)
+        await interaction.followup.send("❌ Sem permissão.", ephemeral=True)
     except discord.HTTPException as e:
         await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
 
@@ -141,11 +148,11 @@ async def antispamativar(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if antispam_ativo:
-        await interaction.response.send_message("⚠️ O antispam já está **ativo**.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Antispam já está **ativo**.", ephemeral=True)
         return
     antispam_ativo = True
     await interaction.response.send_message(
-        f"✅ Antispam **ativado** — {SPAM_LIMITE} mensagens em {SPAM_JANELA}s = {SPAM_CASTIGO} min de castigo.",
+        f"✅ Antispam **ativado** — {SPAM_LIMITE} msgs em {SPAM_JANELA}s = {SPAM_CASTIGO} min de castigo.",
         ephemeral=True
     )
 
@@ -158,7 +165,7 @@ async def antispamdesativar(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if not antispam_ativo:
-        await interaction.response.send_message("⚠️ O antispam já está **desativado**.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Antispam já está **desativado**.", ephemeral=True)
         return
     antispam_ativo = False
     historico.clear()
