@@ -258,23 +258,25 @@ async def conectar(interaction: discord.Interaction, canal: discord.VoiceChannel
             )
             return
 
+    await interaction.response.defer(ephemeral=True)
+
     # já conectado em outro canal — move
     if interaction.guild.voice_client:
         try:
             await interaction.guild.voice_client.move_to(destino)
-            await interaction.response.send_message(f"🔀 Movido para **{destino.name}**.", ephemeral=True)
+            await interaction.followup.send(f"🔀 Movido para **{destino.name}**.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Sem permissão para entrar nesse canal.", ephemeral=True)
+            await interaction.followup.send("❌ Sem permissão para entrar nesse canal.", ephemeral=True)
             return
     else:
         try:
             await destino.connect()
-            await interaction.response.send_message(f"🔊 Conectado em **{destino.name}**.", ephemeral=True)
+            await interaction.followup.send(f"🔊 Conectado em **{destino.name}**.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Sem permissão para entrar nesse canal.", ephemeral=True)
+            await interaction.followup.send("❌ Sem permissão para entrar nesse canal.", ephemeral=True)
             return
         except asyncio.TimeoutError:
-            await interaction.response.send_message("❌ Tempo esgotado ao tentar conectar.", ephemeral=True)
+            await interaction.followup.send("❌ Tempo esgotado ao tentar conectar.", ephemeral=True)
             return
 
     embed = discord.Embed(title="🔊 Bot conectado em voz", color=discord.Color.blurple(),
