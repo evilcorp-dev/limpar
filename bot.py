@@ -8,11 +8,12 @@ from datetime import timedelta
 
 load_dotenv()
 
-TOKEN    = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-OWNER_ID = int(os.getenv("OWNER_ID"))
-ROLE_ID  = int(os.getenv("ROLE_ID"))
-PORT     = int(os.getenv("PORT", 8080))
+TOKEN       = os.getenv("DISCORD_TOKEN")
+GUILD_ID    = int(os.getenv("GUILD_ID"))
+OWNER_ID    = int(os.getenv("OWNER_ID"))
+ROLE_ID     = int(os.getenv("ROLE_ID"))
+MOD_ROLE_ID = int(os.getenv("MOD_ROLE_ID"))
+PORT        = int(os.getenv("PORT", 8080))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -22,10 +23,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 guild_obj = discord.Object(id=GUILD_ID)
 
 
-def tem_permissao(interaction: discord.Interaction) -> bool:
+def tem_permissao_limpar(interaction: discord.Interaction) -> bool:
     has_role = any(r.id == ROLE_ID for r in interaction.user.roles)
-    is_owner = interaction.user.id == OWNER_ID
-    return has_role or is_owner
+    return has_role or interaction.user.id == OWNER_ID
+
+def tem_permissao_mod(interaction: discord.Interaction) -> bool:
+    has_role = any(r.id == MOD_ROLE_ID for r in interaction.user.roles)
+    return has_role or interaction.user.id == OWNER_ID
 
 
 @bot.event
@@ -44,7 +48,7 @@ async def on_ready():
 @bot.tree.command(name="limpar", description="Apaga mensagens do canal (padrão: 2000)", guild=guild_obj)
 @app_commands.describe(quantidade="Número de mensagens a apagar (1–2000)")
 async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
-    if not tem_permissao(interaction):
+    if not tem_permissao_limpar(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if quantidade < 1 or quantidade > 2000:
@@ -72,7 +76,7 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
 @bot.tree.command(name="kick", description="Expulsa um membro do servidor", guild=guild_obj)
 @app_commands.describe(membro="Membro a ser expulso", motivo="Motivo da expulsão")
 async def kick(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo informado"):
-    if not tem_permissao(interaction):
+    if not tem_permissao_mod(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if membro.top_role >= interaction.guild.me.top_role:
@@ -90,7 +94,7 @@ async def kick(interaction: discord.Interaction, membro: discord.Member, motivo:
 @bot.tree.command(name="ban", description="Bane um membro do servidor", guild=guild_obj)
 @app_commands.describe(membro="Membro a ser banido", motivo="Motivo do banimento", deletar_mensagens="Dias de mensagens a deletar (0–7)")
 async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo informado", deletar_mensagens: int = 0):
-    if not tem_permissao(interaction):
+    if not tem_permissao_mod(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if membro.top_role >= interaction.guild.me.top_role:
@@ -109,7 +113,7 @@ async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: 
 @bot.tree.command(name="mute", description="Silencia um membro por X minutos", guild=guild_obj)
 @app_commands.describe(membro="Membro a ser silenciado", minutos="Duração em minutos (máx: 40320)", motivo="Motivo")
 async def mute(interaction: discord.Interaction, membro: discord.Member, minutos: int = 10, motivo: str = "Sem motivo informado"):
-    if not tem_permissao(interaction):
+    if not tem_permissao_mod(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     if membro.top_role >= interaction.guild.me.top_role:
@@ -133,7 +137,7 @@ async def mute(interaction: discord.Interaction, membro: discord.Member, minutos
 @bot.tree.command(name="warn", description="Avisa um membro com uma advertência", guild=guild_obj)
 @app_commands.describe(membro="Membro a ser advertido", motivo="Motivo da advertência")
 async def warn(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo informado"):
-    if not tem_permissao(interaction):
+    if not tem_permissao_mod(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
     try:
