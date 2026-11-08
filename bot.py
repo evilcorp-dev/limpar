@@ -1,4 +1,3 @@
-# language: Python, file: bot.py, target: discord.py 2.x, Python 3.11+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -17,6 +16,8 @@ OWNER_ID    = int(os.getenv("OWNER_ID"))
 ROLE_ID     = int(os.getenv("ROLE_ID"))
 MOD_ROLE_ID = int(os.getenv("MOD_ROLE_ID"))
 PORT        = int(os.getenv("PORT", 8080))
+
+LOG_CHANNEL_ID = 1569096282767626450
 
 SPAM_LIMITE  = 5
 SPAM_JANELA  = 3.0
@@ -41,10 +42,20 @@ def tem_permissao_mod(interaction: discord.Interaction) -> bool:
     return any(r.id == MOD_ROLE_ID for r in interaction.user.roles) or interaction.user.id == OWNER_ID
 
 
+async def enviar_log(guild: discord.Guild, embed: discord.Embed):
+    canal = guild.get_channel(LOG_CHANNEL_ID)
+    if canal is None:
+        print(f"[log] canal {LOG_CHANNEL_ID} não encontrado")
+        return
+    try:
+        await canal.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[log] erro ao enviar log: {e}")
+
+
 @bot.event
 async def on_ready():
     try:
-        # não limpa globais — só sincroniza a guild
         synced = await bot.tree.sync(guild=guild_obj)
         print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) — antispam {'ATIVO' if antispam_ativo else 'INATIVO'}")
     except Exception as e:
@@ -96,7 +107,6 @@ async def on_message(message: discord.Message):
             timeout_ok = True
             print(f"[antispam] timeout aplicado em {member} ({member.id})")
         except discord.Forbidden:
-            # bot sem MODERATE_MEMBERS ou cargo abaixo do membro
             print(f"[antispam] ERRO FORBIDDEN — sem permissão para timeout em {member} ({member.id}). "
                   f"Verifique: 1) bot tem permissão 'Moderar Membros', 2) cargo do bot está ACIMA do cargo do membro.")
         except discord.HTTPException as e:
@@ -108,7 +118,7 @@ async def on_message(message: discord.Message):
                     f"🚫 Você foi silenciado em **{message.guild.name}** por **{SPAM_CASTIGO} minutos** por enviar mensagens demais."
                 )
             except (discord.Forbidden, discord.HTTPException):
-                pass  # DM fechada, ignora
+                pass
 
             try:
                 await message.channel.send(
@@ -117,6 +127,14 @@ async def on_message(message: discord.Message):
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
+            embed = discord.Embed(title="🚫 Antispam — membro punido", color=discord.Color.dark_red(),
+                                  timestamp=discord.utils.utcnow())
+            embed.add_field(name="Membro", value=f"{member.mention} (`{member}` — `{member.id}`)", inline=False)
+            embed.add_field(name="Canal do flood", value=message.channel.mention, inline=True)
+            embed.add_field(name="Duração", value=f"{SPAM_CASTIGO} min", inline=True)
+            embed.set_footer(text=f"ID do membro: {member.id}")
+            await enviar_log(message.guild, embed)
 
         async def liberar(uid: int = member.id):
             await asyncio.sleep(SPAM_CASTIGO * 60)
@@ -128,7 +146,6 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
-# ── /limpar ────────────────────────────────────────────────────
 @bot.tree.command(name="limpar", description="Apaga mensagens do canal (padrão: 2000)", guild=guild_obj)
 @app_commands.describe(quantidade="Número de mensagens a apagar (1–2000)")
 async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
@@ -150,13 +167,22 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
             if len(deleted) < batch:
                 break
         await interaction.followup.send(f"✅ **{deleted_total}** mensagem(ns) apagada(s).", ephemeral=True)
+
+        embed = discord.Embed(title="🧹 /limpar usado", color=discord.Color.orange(),
+                              timestamp=discord.utils.utcnow())
+        embed.add_field(name="Usuário", value=f"{interaction.user.mention} (`{interaction.user}` — `{interaction.user.id}`)", inline=False)
+        embed.add_field(name="Canal", value=interaction.channel.mention, inline=True)
+        embed.add_field(name="Solicitado", value=str(quantidade), inline=True)
+        embed.add_field(name="Apagadas", value=str(deleted_total), inline=True)
+        embed.set_footer(text=f"ID do executor: {interaction.user.id}")
+        await enviar_log(interaction.guild, embed)
+
     except discord.Forbidden:
         await interaction.followup.send("❌ Sem permissão para apagar mensagens.", ephemeral=True)
     except discord.HTTPException as e:
         await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
 
 
-# ── /antispamativar ────────────────────────────────────────────
 @bot.tree.command(name="antispamativar", description="Ativa o sistema antispam", guild=guild_obj)
 async def antispamativar(interaction: discord.Interaction):
     global antispam_ativo
@@ -171,9 +197,15 @@ async def antispamativar(interaction: discord.Interaction):
         f"✅ Antispam **ativado** — {SPAM_LIMITE} msgs em {SPAM_JANELA}s = {SPAM_CASTIGO} min de castigo.",
         ephemeral=True
     )
+    embed = discord.Embed(title="✅ Antispam ativado", color=discord.Color.green(),
+                          timestamp=discord.utils.utcnow())
+    embed.add_field(name="Ativado por", value=f"{interaction.user.mention} (`{interaction.user}` — `{interaction.user.id}`)", inline=False)
+    embed.add_field(name="Limite", value=f"{SPAM_LIMITE} msgs em {SPAM_JANELA}s", inline=True)
+    embed.add_field(name="Castigo", value=f"{SPAM_CASTIGO} min", inline=True)
+    embed.set_footer(text=f"ID do executor: {interaction.user.id}")
+    await enviar_log(interaction.guild, embed)
 
 
-# ── /antispamdesativar ─────────────────────────────────────────
 @bot.tree.command(name="antispamdesativar", description="Desativa o sistema antispam", guild=guild_obj)
 async def antispamdesativar(interaction: discord.Interaction):
     global antispam_ativo
@@ -187,9 +219,13 @@ async def antispamdesativar(interaction: discord.Interaction):
     historico.clear()
     punidos.clear()
     await interaction.response.send_message("🔕 Antispam **desativado**.", ephemeral=True)
+    embed = discord.Embed(title="🔕 Antispam desativado", color=discord.Color.red(),
+                          timestamp=discord.utils.utcnow())
+    embed.add_field(name="Desativado por", value=f"{interaction.user.mention} (`{interaction.user}` — `{interaction.user.id}`)", inline=False)
+    embed.set_footer(text=f"ID do executor: {interaction.user.id}")
+    await enviar_log(interaction.guild, embed)
 
 
-# ── servidor HTTP ──────────────────────────────────────────────
 async def handle_http(reader, writer):
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
     await writer.drain()
