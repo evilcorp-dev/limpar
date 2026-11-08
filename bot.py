@@ -1,8 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import asyncio
 import os
 from dotenv import load_dotenv
 from datetime import timedelta
@@ -14,21 +13,6 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 OWNER_ID = int(os.getenv("OWNER_ID"))
 ROLE_ID  = int(os.getenv("ROLE_ID"))
 PORT     = int(os.getenv("PORT", 8080))
-
-# ── servidor HTTP para o Render free ──
-class _Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-    def log_message(self, *args):
-        pass
-
-threading.Thread(
-    target=lambda: HTTPServer(("0.0.0.0", PORT), _Handler).serve_forever(),
-    daemon=True
-).start()
-# ──────────────────────────────────────
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -63,16 +47,12 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
     if not tem_permissao(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
-
     if quantidade < 1 or quantidade > 2000:
         await interaction.response.send_message("❌ Informe um valor entre **1** e **2000**.", ephemeral=True)
         return
-
     await interaction.response.defer(ephemeral=True)
-
     deleted_total = 0
     remaining = quantidade
-
     try:
         while remaining > 0:
             batch = min(remaining, 100)
@@ -81,7 +61,6 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
             remaining -= batch
             if len(deleted) < batch:
                 break
-
         await interaction.followup.send(f"✅ **{deleted_total}** mensagem(ns) apagada(s).", ephemeral=True)
     except discord.Forbidden:
         await interaction.followup.send("❌ Sem permissão para apagar mensagens neste canal.", ephemeral=True)
@@ -96,16 +75,13 @@ async def kick(interaction: discord.Interaction, membro: discord.Member, motivo:
     if not tem_permissao(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
-
     if membro.top_role >= interaction.guild.me.top_role:
-        await interaction.response.send_message("❌ Não consigo expulsar esse membro (cargo superior ao meu).", ephemeral=True)
+        await interaction.response.send_message("❌ Cargo superior ao meu.", ephemeral=True)
         return
-
     try:
         await membro.send(f"👢 Você foi expulso de **{interaction.guild.name}**.\n📋 Motivo: {motivo}")
     except discord.HTTPException:
         pass
-
     await membro.kick(reason=f"{interaction.user} — {motivo}")
     await interaction.response.send_message(f"✅ **{membro}** foi expulso.\n📋 Motivo: {motivo}", ephemeral=True)
 
@@ -117,52 +93,40 @@ async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: 
     if not tem_permissao(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
-
     if membro.top_role >= interaction.guild.me.top_role:
-        await interaction.response.send_message("❌ Não consigo banir esse membro (cargo superior ao meu).", ephemeral=True)
+        await interaction.response.send_message("❌ Cargo superior ao meu.", ephemeral=True)
         return
-
     deletar_mensagens = max(0, min(7, deletar_mensagens))
-
     try:
         await membro.send(f"🔨 Você foi banido de **{interaction.guild.name}**.\n📋 Motivo: {motivo}")
     except discord.HTTPException:
         pass
-
     await membro.ban(reason=f"{interaction.user} — {motivo}", delete_message_days=deletar_mensagens)
     await interaction.response.send_message(f"✅ **{membro}** foi banido.\n📋 Motivo: {motivo}", ephemeral=True)
 
 
 # ── /mute ──────────────────────────────────────────────────────
 @bot.tree.command(name="mute", description="Silencia um membro por X minutos", guild=guild_obj)
-@app_commands.describe(membro="Membro a ser silenciado", minutos="Duração em minutos (máx: 40320 / 28 dias)", motivo="Motivo")
+@app_commands.describe(membro="Membro a ser silenciado", minutos="Duração em minutos (máx: 40320)", motivo="Motivo")
 async def mute(interaction: discord.Interaction, membro: discord.Member, minutos: int = 10, motivo: str = "Sem motivo informado"):
     if not tem_permissao(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
-
     if membro.top_role >= interaction.guild.me.top_role:
-        await interaction.response.send_message("❌ Não consigo silenciar esse membro (cargo superior ao meu).", ephemeral=True)
+        await interaction.response.send_message("❌ Cargo superior ao meu.", ephemeral=True)
         return
-
     if minutos < 1 or minutos > 40320:
-        await interaction.response.send_message("❌ Informe entre **1** e **40320** minutos (28 dias).", ephemeral=True)
+        await interaction.response.send_message("❌ Informe entre **1** e **40320** minutos.", ephemeral=True)
         return
-
-    duracao = timedelta(minutes=minutos)
-
     try:
-        await membro.timeout(duracao, reason=f"{interaction.user} — {motivo}")
-        await interaction.response.send_message(
-            f"🔇 **{membro}** silenciado por **{minutos} minuto(s)**.\n📋 Motivo: {motivo}",
-            ephemeral=True
-        )
+        await membro.timeout(timedelta(minutes=minutos), reason=f"{interaction.user} — {motivo}")
+        await interaction.response.send_message(f"🔇 **{membro}** silenciado por **{minutos} min**.\n📋 Motivo: {motivo}", ephemeral=True)
         try:
-            await membro.send(f"🔇 Você foi silenciado em **{interaction.guild.name}** por **{minutos} minuto(s)**.\n📋 Motivo: {motivo}")
+            await membro.send(f"🔇 Você foi silenciado em **{interaction.guild.name}** por **{minutos} min**.\n📋 Motivo: {motivo}")
         except discord.HTTPException:
             pass
     except discord.Forbidden:
-        await interaction.response.send_message("❌ Sem permissão para silenciar esse membro.", ephemeral=True)
+        await interaction.response.send_message("❌ Sem permissão para silenciar.", ephemeral=True)
 
 
 # ── /warn ──────────────────────────────────────────────────────
@@ -172,17 +136,23 @@ async def warn(interaction: discord.Interaction, membro: discord.Member, motivo:
     if not tem_permissao(interaction):
         await interaction.response.send_message("❌ Você não tem permissão.", ephemeral=True)
         return
-
     try:
         await membro.send(f"⚠️ Você recebeu uma advertência em **{interaction.guild.name}**.\n📋 Motivo: {motivo}")
         dm_status = "DM enviada ao membro."
     except discord.HTTPException:
-        dm_status = "Não foi possível enviar DM ao membro."
-
-    await interaction.response.send_message(
-        f"⚠️ **{membro}** foi advertido.\n📋 Motivo: {motivo}\n📨 {dm_status}",
-        ephemeral=True
-    )
+        dm_status = "Não foi possível enviar DM."
+    await interaction.response.send_message(f"⚠️ **{membro}** advertido.\n📋 Motivo: {motivo}\n📨 {dm_status}", ephemeral=True)
 
 
-bot.run(TOKEN)
+# ── servidor HTTP no mesmo event loop ─────────────────────────
+async def handle_http(reader, writer):
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    await writer.drain()
+    writer.close()
+
+async def main():
+    server = await asyncio.start_server(handle_http, "0.0.0.0", PORT)
+    async with bot:
+        await asyncio.gather(server.serve_forever(), bot.start(TOKEN))
+
+asyncio.run(main())
