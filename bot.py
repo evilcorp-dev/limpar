@@ -31,11 +31,10 @@ async def on_ready():
     try:
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
-        bot.tree.clear_commands(guild=guild_obj)
-        await bot.tree.sync(guild=guild_obj)
-        print(f"[✓] Bot online como {bot.user} — comandos sincronizados.")
+        synced = await bot.tree.sync(guild=guild_obj)
+        print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) sincronizado(s).")
     except Exception as e:
-        print(f"[✗] Erro ao sincronizar comandos: {e}")
+        print(f"[✗] Erro ao sincronizar: {e}")
 
 
 @bot.tree.command(name="limpar", description="Apaga mensagens do canal (padrão: 2000)", guild=guild_obj)
