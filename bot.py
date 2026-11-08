@@ -1,3 +1,4 @@
+# language: Python, file: bot.py, target: discord.py 2.x, Python 3.11+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -17,9 +18,9 @@ ROLE_ID     = int(os.getenv("ROLE_ID"))
 MOD_ROLE_ID = int(os.getenv("MOD_ROLE_ID"))
 PORT        = int(os.getenv("PORT", 8080))
 
-SPAM_LIMITE  = 5      # mensagens
-SPAM_JANELA  = 3.0    # segundos
-SPAM_CASTIGO = 5      # minutos
+SPAM_LIMITE  = 5
+SPAM_JANELA  = 3.0
+SPAM_CASTIGO = 5
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,7 +29,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild_obj = discord.Object(id=GUILD_ID)
 
-antispam_ativo = True   # ativo por padrão
+antispam_ativo = True
 historico: dict[int, deque] = defaultdict(deque)
 punidos: set[int] = set()
 
@@ -43,17 +44,20 @@ def tem_permissao_mod(interaction: discord.Interaction) -> bool:
 @bot.event
 async def on_ready():
     try:
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
+        # não limpa globais — só sincroniza a guild
         synced = await bot.tree.sync(guild=guild_obj)
-        print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) — antispam ATIVO")
+        print(f"[✓] Bot online como {bot.user} — {len(synced)} comando(s) — antispam {'ATIVO' if antispam_ativo else 'INATIVO'}")
     except Exception as e:
-        print(f"[✗] Erro: {e}")
+        print(f"[✗] Erro no sync: {e}")
 
 
 @bot.event
 async def on_message(message: discord.Message):
-    if not antispam_ativo or message.author.bot:
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    if not antispam_ativo:
         await bot.process_commands(message)
         return
 
@@ -61,12 +65,11 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    member = message.author
-    if isinstance(member, discord.User):
+    member = message.guild.get_member(message.author.id)
+    if member is None:
         await bot.process_commands(message)
         return
 
-    # cargos isentos
     ids_isentos = {ROLE_ID, MOD_ROLE_ID}
     if any(r.id in ids_isentos for r in member.roles) or member.id == OWNER_ID:
         await bot.process_commands(message)
@@ -80,7 +83,6 @@ async def on_message(message: discord.Message):
     fila = historico[member.id]
     fila.append(agora)
 
-    # remove mensagens antigas fora da janela
     while fila and agora - fila[0] > SPAM_JANELA:
         fila.popleft()
 
@@ -88,26 +90,40 @@ async def on_message(message: discord.Message):
         punidos.add(member.id)
         historico[member.id].clear()
 
+        timeout_ok = False
         try:
             await member.timeout(timedelta(minutes=SPAM_CASTIGO), reason="Antispam — flood")
+            timeout_ok = True
+            print(f"[antispam] timeout aplicado em {member} ({member.id})")
+        except discord.Forbidden:
+            # bot sem MODERATE_MEMBERS ou cargo abaixo do membro
+            print(f"[antispam] ERRO FORBIDDEN — sem permissão para timeout em {member} ({member.id}). "
+                  f"Verifique: 1) bot tem permissão 'Moderar Membros', 2) cargo do bot está ACIMA do cargo do membro.")
+        except discord.HTTPException as e:
+            print(f"[antispam] ERRO HTTP ao timeout {member}: {e}")
+
+        if timeout_ok:
             try:
                 await member.send(
                     f"🚫 Você foi silenciado em **{message.guild.name}** por **{SPAM_CASTIGO} minutos** por enviar mensagens demais."
                 )
-            except discord.HTTPException:
-                pass
-            await message.channel.send(
-                f"⚠️ {member.mention} foi silenciado por **{SPAM_CASTIGO} min** por flood.",
-                delete_after=5
-            )
-        except discord.Forbidden:
-            pass
+            except (discord.Forbidden, discord.HTTPException):
+                pass  # DM fechada, ignora
 
-        async def liberar(uid=member.id):
+            try:
+                await message.channel.send(
+                    f"⚠️ {member.mention} foi silenciado por **{SPAM_CASTIGO} min** por flood.",
+                    delete_after=5
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        async def liberar(uid: int = member.id):
             await asyncio.sleep(SPAM_CASTIGO * 60)
             punidos.discard(uid)
+            print(f"[antispam] {uid} removido de punidos")
 
-        asyncio.create_task(liberar())
+        asyncio.ensure_future(liberar())
 
     await bot.process_commands(message)
 
@@ -135,7 +151,7 @@ async def limpar(interaction: discord.Interaction, quantidade: int = 2000):
                 break
         await interaction.followup.send(f"✅ **{deleted_total}** mensagem(ns) apagada(s).", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send("❌ Sem permissão.", ephemeral=True)
+        await interaction.followup.send("❌ Sem permissão para apagar mensagens.", ephemeral=True)
     except discord.HTTPException as e:
         await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
 
@@ -169,10 +185,11 @@ async def antispamdesativar(interaction: discord.Interaction):
         return
     antispam_ativo = False
     historico.clear()
+    punidos.clear()
     await interaction.response.send_message("🔕 Antispam **desativado**.", ephemeral=True)
 
 
-# ── servidor HTTP no mesmo event loop ─────────────────────────
+# ── servidor HTTP ──────────────────────────────────────────────
 async def handle_http(reader, writer):
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
     await writer.drain()
